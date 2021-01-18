@@ -1,0 +1,81 @@
+model{
+
+# ---------------------------------------------  
+# TERM DEFINITIONS:
+# N... total number of students
+# group... indicator of class membership
+# J... number of schools
+# grad4... binary variable of 6-year graduation
+# grit... self-reported grit score
+# ---------------------------------------------  
+
+
+# ---------------------------------------------  
+# L1 MODEL: cycle through for each case (1166):  
+	# L1 FORMULA: logit of graduation as outcome (link function) predicted by:
+			# beta.0: intercept
+			# beta.w[ithin]: estimate associated with L1 grit 
+				# (grit - grit.b[etween])
+			# beta.b[etween]: estimate associated with L2 grit.b[etween], 
+				# varying w/each schoolID
+			# delta - random intercept associated with school ID (estimated next section)
+			# beta.3 - estimate associated with Ravens score (cognitive ability)
+			# beta.3.m - estimate associated with missing ravens (dummy code)   
+	# OUTCOME: Persistence defined to distribute as a Bernoulli variable 
+		# (binary outcomes)
+     # PREDICTOR: Individual grit scores distribute as a normal distribution around each 
+        # school's mean (which is estimated in L2 model below)
+# ---------------------------------------------  
+
+for(i in 1:1166){
+   
+     grad4[i] ~ dbern(p[i]) 
+                 
+     logit(p[i]) <- beta.0 + beta.w * (grit[i] - grit.b[schoolID[i]])
+                     + beta.b * grit.b[schoolID[i]] + delta[schoolID[i]]
+                     + beta.3 * ravens[i] +  beta.3.m * ravens.MD[i]
+        
+          grit[i] ~ dnorm(grit.b[schoolID[i]], invSigmaSqrd.w)
+
+}
+
+# ---------------------------------------------
+# L2 MODEL: cycle through for each school (15):
+     # Estimate of random grad4 intercept by school, normally distributed
+	 # Estimate of school-level grit mean 
+# ---------------------------------------------  
+
+for(j in 1:15){
+     
+     delta[j] ~ dnorm(0, invTauSqrd.p) #... between-class residual of grad4
+     
+     grit.b[j] ~ dnorm(mu.x, invTauSqrd.b) #... latent class mean of grit
+     
+}
+
+# noninformative priors:
+beta.0 ~ dnorm(0, 0.001) #... intercept of grad4
+beta.w ~ dnorm(0, 0.001) #... within-class coefficient for grit
+beta.b ~ dnorm(0, 0.001) #... between-class coefficient for grit
+beta.3 ~ dnorm(0, 0.001) #... cognitive ability coefficient
+beta.3.m ~ dnorm(0, 0.001) #... cognitive missing dummy coefficienct
+
+mu.x ~ dnorm(0, 0.001) #... grand mean of grit
+
+sigmaSqrd.w ~ dunif(0, 100) #... within-class variance of grit
+invSigmaSqrd.w <- 1 / sigmaSqrd.w #... associated precision
+
+tauSqrd.p ~ dunif(0, 100) #... between-class residual variance of persistence
+invTauSqrd.p <- 1 / tauSqrd.p #... associated precision
+
+tauSqrd.b ~ dgamma( 0.001, 0.001 )
+invTauSqrd.b <- 1 / tauSqrd.b #... between-class variance of grit
+
+
+}
+
+# Code adapted from (Zitzmann, Lüdtke, & Robitzsch, 2015) as a logistic regression.
+# Used guidance from:
+  # http://www.columbia.edu/~cjd11/charles_dimaggio/DIRE/styled-4/styled-11/code-8/#fnref10
+  # https://www4.stat.ncsu.edu/~reich/ABA/code/GLM to convert to GLM
+  
