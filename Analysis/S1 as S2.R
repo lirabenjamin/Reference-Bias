@@ -6,6 +6,7 @@ library(tidyverse)
 library(Ben)
 library(lme4)
 library(lmerTest)
+library(performance) # spun-off functions from lmerTest, does ICC's for nesting groupings
 library(magrittr)
 library(lm.beta)
 
@@ -40,13 +41,18 @@ tidylmer = function(x){
 
 #Calculating all models
 models = ne %>% 
-         # Null model
-  mutate(nm = map(data,function(x){x %>%  lmer(Value ~ 1 + (1|schoolid),data=.)}),
-         # ICC computation from null model
-         icc = map(nm,function(x){x %>% VarCorr() %>% as.data.frame() %>% select(grp,vcov) %>% spread(grp,vcov) %>% transmute(ICC = schoolid/(Residual+schoolid)) %>% return()})) %>% 
-  unnest(icc) %>% 
-         # Complete model
-  mutate(fm = map(data,function(x){x %>% lmer(Value ~ L1grit + L2grit + factor(year) + (1|schoolid),data=.)}),
+         # Null model with years nested in schools:
+  mutate(nm = map(data, ~lmer(Value ~ 1 + (1|schoolid/year), .x)),
+         # Nested ICC computation from null model, 
+         icc = map(nm, icc, by_group = TRUE),
+         # Pull out the by-year, within-school component:
+         ICC = map_dbl(icc, list("ICC", 1)),
+         # Complete model, original:
+         fm = map(data,function(x){x %>% lmer(Value ~ L1grit + L2grit + factor(year) + (1|schoolid),data=.)}),
+         # Complete model, proposed alternative 1 (random effect is YEAR, which is more what we're looking at within-schools):
+         fm_alt1 = map(data,function(x){x %>% lmer(Value ~ L1grit + L2grit + factor(schoolid) + (1|year),data=.)}),
+         # Complete model, proposed alternative 2 (random effect year nested within schools--maybe the closest?):
+         fm_alt2 = map(data,function(x){x %>% lmer(Value ~ L1grit + L2grit + (1|schoolid/year),data=.)}),
          coefs = map(fm, tidylmer)) %>% 
   #Adding predicted values
   mutate(pred = map(fm,predict)) %>% 
@@ -54,6 +60,7 @@ models = ne %>%
   mutate(data = map(data, rownames_to_column,"name")) %>% 
   #Copying predicted values to data
   mutate(data = map2(data,pred,left_join))
+
 
 #Generating Table
 models %>% 
