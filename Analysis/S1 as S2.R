@@ -84,7 +84,7 @@ models %>%
 #Appendix: Running as mean level lms
 e %>% 
   select(!matches("classmates")) %>% 
-  #group_by(schoolid,year) %>% summarise_all(mean,na.rm=T) %>% # comment this line to run at student level
+  group_by(schoolid,year) %>% summarise_all(mean,na.rm=T) %>% # comment this line to run at student level
   gather(Outcome, Value,-c(1:4)) %>% 
   group_by(Outcome) %>% 
   nest() %>% 
@@ -98,4 +98,12 @@ e %>%
   spread(Outcome,beta) %>% 
   filter(term != "(Intercept)") %T>% 
   write.clip()
-  
+
+models %>% 
+  unnest(coefs) %>% 
+  mutate(beta = formatest(B,p,2)) %>%
+  select(Outcome,term,beta) %>% 
+  spread(term,beta) %>% 
+  select(!matches("Intercept")) %T>% 
+  write.clip()
+      
