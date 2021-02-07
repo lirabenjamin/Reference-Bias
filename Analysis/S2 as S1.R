@@ -1,9 +1,10 @@
-load("Data/Data.rda")
+load("Data/Data with GPA 210128.rda")
 library(tidyverse)
 library(magrittr)
 library(broom)
 library(lm.beta)
 library(lfe)
+library(psych)
 
 d = refbias.charter
 
@@ -20,7 +21,9 @@ d = d %>%
     Grit = grit.c.Z,
     SelfControl = sc.c.Z,
     ADT = Tmath.c.Z,
-    Ravens = ravens.strict.c.Z
+    Ravens = ravens.strict.c.Z,
+    SAT = SAT_meanTotScore_1600_new,
+    GPA = GPA_all_sen
   ) %>% 
   rownames_to_column()
 
@@ -32,88 +35,119 @@ resids = d %>% lm(ADT ~ Ravens,.) %>%
 
 d = left_join(d,resids)
 
-# Running FELM model
-models = d %>% 
-  gather(Years,Graduated,-rowname,,-school,-c(Grit:ADTresid)) %>%  
-  gather(Outcome, Value, -c(rowname,school,Years,Graduated)) %>% 
-  group_by(school,Years,Outcome) %>% 
+d %>% select(-rowname) %>% 
+  select(Ravens,Grad4,Grad6,SAT,GPA) %>% Ben::HARcor()
+
+
+d %>% select(-rowname) %>% 
+  select(Ravens,Grad4,Grad6,SAT,GPA) %>% 
+  mutate(Grad4 = as.factor(Grad4),Grad6 = as.factor(Grad6)) %>% 
+  polycor::hetcor() %>% 
+  `$`(correlations) %>% 
+  psych::principal(nfactors = 2) %>% 
+  print.psych(cut = .4,sort=T,rotate="varimax")
+
+# Calculating Variables and nesting data ####
+nesteddata = 
+  d %>% 
+  gather(Predictor,PValue,-rowname,,-school,-c(Grit:ADT,ADTresid)) %>%  
+  gather(Outcome, OValue, -c(rowname,school,Predictor,PValue)) %>% 
+  group_by(school,Predictor,Outcome) %>% 
   arrange(school) %>% 
-  mutate(Grad_s = mean(Graduated)) %>% 
-  mutate(Grad_d = Graduated - Grad_s,
+  mutate(Pred_s = mean(PValue,na.rm=T)) %>% 
+  mutate(Pred_d = PValue - Pred_s,
          school_n = n(),
-         Grad_sum = Grad_s*school_n) %>% 
+         Pred_sum = Pred_s*school_n) %>% 
   ungroup() %>% 
-  mutate(Grad_ex = (Grad_sum-Graduated)/(school_n-1)) %>% 
-  group_by(Years,Outcome) %>% 
-  nest() %>% 
-  mutate(lm = map(data,~lm(Value ~ Graduated + Grad_ex + factor(school),data=.)),
-         lmb = map(lm,lm.beta::lm.beta),
-         tidy = map(lmb,tidy),
-         glance = map(lmb,glance),
-         felm = map(data,~felm(Value ~ Graduated + Grad_ex | 0 | 0 | school,data=.)))
+  mutate(Pred_ex = (Pred_sum-PValue)/(school_n-1)) %>% 
+  select(-school_n,-Pred_sum,-Pred_d,-Pred_s) %>% 
+  group_by(Predictor,Outcome) %>% 
+  mutate_at(c("PValue","Pred_ex"),scale) %>% #Exclude for nonstandardized estimates
+  nest() 
 
 
-felm = models$felm[[1]] %>% tidy
-for (i in 2:10){
-  felm = rbind(felm,models$felm[[i]] %>% tidy)
+# Spreading nesteddata
+nesteddata$data[[1]]
+
+d %>% 
+  mutate_at(3:11,scale) %>% 
+  group_by(school) %>% 
+  arrange(school) %>% 
+  mutate(mgirt = mean(Grit,na.rm=T),
+    Grit_ex = ((mean(Grit,na.rm=T)*n())-Grit)/n()-1)
+  
+
+models = nesteddata %>% 
+  mutate(#lm = map(data,~lm(OValue ~ PValue + Pred_ex + factor(school),data=.)),
+         #lmb = map(lm,lm.beta::lm.beta),
+         #tidy = map(lmb,tidy),
+        # glance = map(lmb,glance),
+         felm = map(data,~felm(OValue ~ PValue + Pred_ex | 0 | 0 | school,data=.)))
+
+
+
+tidy.felm = function(felm){
+  coef = felm$coefficients %>% as.data.frame() %>% rownames_to_column("term")
+  p = felm$pval %>% enframe("term","p") 
+  se = felm$se %>% enframe("term","SE")
+  t = felm$tval %>% enframe("term","t")
+  tidy = left_join(coef,se) %>% left_join(t)%>%  left_join(p)
+  return(tidy)
 }
-felm = cbind(models[rep(seq_len(nrow(models)), each=3),1:2],felm)
-felm %>% 
-  mutate_at(4:6,round,2) %>% 
-  mutate_at(7,round,3) %T>% 
+
+models %>% 
+  mutate(tidy = map(felm,tidy.felm)) %>% 
+  unnest(tidy) %>%  
+  mutate_at(c("OValue","SE","t"),round,2) %>% 
+  mutate_at("p",Ben::formatps) %>% 
+  select(-data,-felm) %T>% 
   Ben::write.clip()
 
 # Running FELM model, controlling for school
-models2 = d %>% 
-  gather(Years,Graduated,-rowname,,-school,-c(Grit:ADTresid)) %>%  
-  gather(Outcome, Value, -c(rowname,school,Years,Graduated)) %>% 
-  group_by(school,Years,Outcome) %>% 
-  arrange(school) %>% 
-  mutate(Grad_s = mean(Graduated)) %>% 
-  mutate(Grad_d = Graduated - Grad_s,
-         school_n = n(),
-         Grad_sum = Grad_s*school_n) %>% 
-  ungroup() %>% 
-  mutate(Grad_ex = (Grad_sum-Graduated)/(school_n-1)) %>% 
-  group_by(Years,Outcome) %>% 
-  nest() %>% 
-  mutate(lm = map(data,~lm(Value ~ Graduated + Grad_ex + factor(school),data=.)),
-         lmb = map(lm,lm.beta::lm.beta),
-         tidy = map(lmb,tidy),
-         glance = map(lmb,glance),
-         felm = map(data,~felm(Value ~ Graduated + Grad_ex | factor(school) | 0 | school,data=.)))
+models2 = nesteddata %>% 
+  mutate(felm = map(data,~felm(OValue ~ PValue + Pred_ex | (school) | 0 | school,data=.)))
 
 
-felm2 = models2$felm[[1]] %>% tidy
-for (i in 2:10){
-  felm2 = rbind(felm2,models$felm[[i]] %>% tidy)
-}
-felm2 = cbind(models[rep(seq_len(nrow(models)), each=3),1:2],felm2)
-felm2 %>% 
-  mutate_at(4:6,round,2) %>% 
-  mutate_at(7,round,3) %T>% 
+models2 %>% 
+  mutate(tidy = map(felm,tidy.felm)) %>% 
+  unnest(tidy) %>%  
+  mutate_at(c("OValue","SE","t"),round,2) %>% 
+  mutate_at("p",Ben::formatps) %>% 
+  select(-data,-felm) %T>% 
   Ben::write.clip()
 
-#No clusterred errors
+#Table
 models %>% 
+  mutate(tidy = map(felm,tidy.felm)) %>% 
   unnest(tidy) %>% 
-  select(Years,Outcome, term,std_estimate,std.error,p.value) %>% 
-  filter(term %in% c('Graduated','Grad_ex')) %>% 
+  select(Predictor,Outcome, term,OValue,SE,p) %>% 
+  filter(term %in% c('PValue','Pred_ex')) %>% 
   #Just keep formated estimates
-  mutate(beta = Ben::formatest(std_estimate,p.value)) %>% 
-  select(Years,Outcome,term,beta) 
+  mutate(beta = Ben::formatest(OValue,p)) %>% 
+  select(Predictor,Outcome,term,beta) %>% 
+  spread(term,beta) %>% 
+  unite(B,Pred_ex,PValue,sep = "|") %>% 
+  spread(Outcome,B)
   
 #No Clustered errors
 models %>% 
+  mutate(tidy = map(felm,tidy.felm)) %>% 
   unnest(tidy) %>% 
-  filter(term  %in% c( "Grad_ex")  ,Outcome != "Ravens") %>% 
-  ggplot(aes(Outcome,std_estimate,shape = p.value<.05,col = term))+
-  geom_point(size = 3,position = position_dodge(width = .55))+
-  geom_line(aes(group = Years))+
-  facet_wrap(~Years)+
-  labs(title = "Do your classmates graduation rate affect how you rate your grit",
+  filter(term  %in% c( "Pred_ex","PValue")  ,
+         #Predictor %in% c("Grad4","Grad6"),
+         #Outcome != "Ravens"
+         ) %>% 
+  mutate(Term = case_when(term == "PValue" ~ "Own",
+                          term == "Pred_ex" ~ "Peer")) %>% 
+  ggplot(aes(Outcome,OValue,shape = p<.05,col = Term))+
+  geom_point(size = 3)+
+  geom_line(aes(group = Term))+
+  facet_wrap(~Predictor,nrow = 1)+
+  labs(title = "Classmate quality and objective and self-reported grit",
        x = 'Outcome',
        y = 'Beta')+
+  geom_hline(yintercept = 0,size = .2)+
+  geom_vline(xintercept = 2.5,size = .2)+
   Ben::theme_ang()
 
 
